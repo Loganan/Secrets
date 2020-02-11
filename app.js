@@ -9,6 +9,7 @@ const passport = require("passport");
 const passportLocalMongoose = require("passport-local-mongoose");
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const findOrCreate = require("mongoose-findorcreate");
+const FacebookStrategy = require("passport-facebook").Strategy;
 
 //Removes encryption in favour of passport
 // const bcrypt = require("bcrypt");
@@ -21,8 +22,6 @@ const findOrCreate = require("mongoose-findorcreate");
 //const encrypt = require("mongoose-encryption");
 
 const app = express();
-
-console.log(process.env.API_KEY);
 
 app.use(express.static("public"));
 app.set('view engine', 'ejs');
@@ -49,7 +48,9 @@ mongoose.set("useCreateIndex", true);
 const userSchema = new mongoose.Schema({
   email: String,
   password: String,
-  googleId: String
+  googleId: String,
+  facebookId: String,
+  secret: String
 });
 
 userSchema.plugin(passportLocalMongoose);
@@ -89,9 +90,25 @@ passport.use(new GoogleStrategy({
   }
 ));
 
+passport.use(new FacebookStrategy({
+    clientID: process.env.FACEBOOK_APP_ID,
+    clientSecret: process.env.FACEBOOK_APP_SECRET,
+    callbackURL: "http://localhost:3000/auth/facebook/secrets"
+  },
+  function(accessToken, refreshToken, profile, done) {
+    //console.log(profile);
+    User.findOrCreate({ facebookId: profile.id }, function(err, user) {
+      if (err) { return done(err); }
+      done(null, user);
+    });
+  }
+));
+
 app.get("/", function(req, res) {
   res.render("home");
 });
+
+//OAuth2.0 for google
 
 app.get("/auth/google",
   passport.authenticate("google", { scope: ["profile"] })
@@ -104,6 +121,16 @@ app.get("/auth/google/secrets",
     res.redirect("/secrets");
   });
 
+//OAuth2.0 for Facebook
+
+app.get("/auth/facebook",
+  passport.authenticate("facebook")
+);
+
+app.get("/auth/facebook/secrets",
+  passport.authenticate("facebook", { successRedirect: "/secrets", failureRedirect: "/login" })
+);
+
 app.get("/login", function(req, res) {
   res.render("login");
 });
@@ -113,11 +140,55 @@ app.get("/register", function(req, res) {
 });
 
 app.get("/secrets", function(req, res) {
+  // if (req.isAuthenticated()) {
+  //   res.render("secrets");
+  // } else {
+  //   res.redirect("/login");
+  // }
+  //Changed so that user authentication not required to view secrets. Only to submit.
+  User.find({"secret": {$ne:null}}, function(err, foundUsers){
+  //Will look through all users and pick out users where secret field is not null.
+    if(err){
+      console.log(err);
+    } else {
+      if(foundUsers){
+        if(req.isAuthenticated()){
+          res.render("secrets", {usersWithSecrets: foundUsers, authenticated: true});
+        } else {
+          res.render("secrets", {usersWithSecrets: foundUsers, authenticated: false});
+        }
+        //Variable is used when list is appended in secrets.ejs
+        //Whether user is authenticated or not will change the view on secrets.ejs page.
+      }
+    }
+  });
+});
+
+app.get("/submit", function(req, res){
   if (req.isAuthenticated()) {
-    res.render("secrets");
+    res.render("submit");
   } else {
     res.redirect("/login");
   }
+});
+
+app.post("/submit", function(req, res){
+  const submittedSecret = req.body.secret;
+
+  console.log(req.user);
+
+  User.findById(req.user.id, function(err, foundUser){
+    if(err){
+      console.log(err);
+    } else {
+      if(foundUser){
+        foundUser.secret = submittedSecret;
+        foundUser.save(function(){
+          res.redirect("/secrets");
+        });
+      }
+    }
+  });
 });
 
 app.get("/logout", function(req, res) {
@@ -160,14 +231,6 @@ app.post("/login", function(req, res) {
   });
 
 });
-
-
-
-
-
-
-
-
 
 app.listen(3000, function() {
   console.log("Server started on post 3000.");
